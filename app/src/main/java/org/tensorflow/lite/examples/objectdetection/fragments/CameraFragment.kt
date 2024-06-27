@@ -237,32 +237,41 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         // Preview. Only using the 4:3 ratio because this is the closest to our models
         preview =
             Preview.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                .setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                //.setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
                 .build()
+
+        val MIN_FRAME_INTERVAL_MS = 100 // Example minimum frame interval
+        var lastAnalyzedTimestamp = 0L
 
         // ImageAnalysis. Using RGBA 8888 to match how our models work
         imageAnalyzer =
             ImageAnalysis.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                .setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                //.setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build()
                 // The analyzer can then be assigned to the instance
                 .also {
                     it.setAnalyzer(cameraExecutor) { image ->
-                        if (!::bitmapBuffer.isInitialized) {
-                            // The image rotation and RGB image buffer are initialized only once
-                            // the analyzer has started running
-                            bitmapBuffer = Bitmap.createBitmap(
-                              image.width,
-                              image.height,
-                              Bitmap.Config.ARGB_8888
-                            )
-                        }
+                        val currentTimeMillis = System.currentTimeMillis()
+                        if (currentTimeMillis - lastAnalyzedTimestamp >= MIN_FRAME_INTERVAL_MS) {
 
-                        detectObjects(image)
+                            if (!::bitmapBuffer.isInitialized) {
+                                // The image rotation and RGB image buffer are initialized only once
+                                // the analyzer has started running
+                                bitmapBuffer = Bitmap.createBitmap(
+                                    image.width,
+                                    image.height,
+                                    Bitmap.Config.ARGB_8888
+                                )
+                            }
+
+                            detectObjects(image)
+
+                            lastAnalyzedTimestamp = currentTimeMillis
+                        }
                     }
                 }
 
@@ -339,7 +348,8 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
             fragmentCameraBinding.overlay.setNumberPlateResults(
                 numberPlateResults ?: LinkedList<NumberPlateDetection>(),
                 imageHeight,
-                imageWidth
+                imageWidth,
+                inferenceTime
             )
 
             // Force a redraw

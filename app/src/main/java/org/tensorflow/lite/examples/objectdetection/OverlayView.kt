@@ -23,7 +23,9 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.AttributeSet
+import android.view.Gravity
 import android.view.View
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import java.util.LinkedList
 import kotlin.math.max
@@ -36,6 +38,8 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
     private var boxPaint = Paint()
     private var textBackgroundPaint = Paint()
     private var textPaint = Paint()
+
+    private var inferenceTimeTaken: Long = 0;
 
     private var scaleFactor: Float = 1f
 
@@ -104,6 +108,9 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
         }
 
         for (result in numberPlateResults){
+            if(result.number?.isEmpty() == true) {
+                continue;
+            }
             val left = result.left* scaleFactor
             val top = result.top* scaleFactor
             val right = result.right* scaleFactor
@@ -117,7 +124,19 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
             // Create text to display alongside detected objects
             val drawableText =
                 number + "(" +
-                        String.format("%.2f", score) +")"
+                        String.format("%.2f", score) +")"+
+                        " - "+String.format("%.2f", (inferenceTimeTaken/1000.0))+"s"
+
+//            if(score>50) {
+//                val toast = Toast.makeText(context, drawableText, Toast.LENGTH_LONG);
+//                // Set gravity to the center-right corner of the screen
+//                toast.setGravity(Gravity.CENTER_VERTICAL or Gravity.END, 0, 0)
+//
+//                // Adjust the x offset to create space from the edge of the screen
+//                val xOffset = context.resources.displayMetrics.widthPixels / 8 // Adjust as needed
+//                toast.setGravity(Gravity.CENTER_VERTICAL or Gravity.END, xOffset, 0)
+//                toast.show();
+//            }
 
             // Draw rect behind display text
             textBackgroundPaint.getTextBounds(drawableText, 0, drawableText.length, bounds)
@@ -133,6 +152,7 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
 
             // Draw text for detected object
             canvas.drawText(drawableText, left, top + bounds.height(), textPaint)
+            invalidate()
         }
     }
 
@@ -152,9 +172,13 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
         detectedNumberPlateResults: List<NumberPlateDetection>,
         imageHeight: Int,
         imageWidth: Int,
+        inferenceTime: Long,
     ){
+        inferenceTimeTaken = inferenceTime;
+        results = LinkedList();
         numberPlateResults = detectedNumberPlateResults
         scaleFactor = max(width * 1f / imageWidth, height * 1f / imageHeight)
+        invalidate()
     }
 
     companion object {

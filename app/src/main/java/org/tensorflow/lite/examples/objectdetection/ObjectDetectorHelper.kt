@@ -18,9 +18,12 @@ package org.tensorflow.lite.examples.objectdetection
 import android.content.Context
 import android.content.res.AssetFileDescriptor
 import android.content.res.AssetManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
@@ -28,6 +31,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -45,13 +49,14 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
+import java.util.LinkedList
 
 class ObjectDetectorHelper(
   var threshold: Float = 0.5f,
   var numThreads: Int = 2,
   var maxResults: Int = 3,
   var currentDelegate: Int = 0,
-  var currentModel: Int = 0,
+  var currentModel: Int = 4,
   val context: Context,
   val objectDetectorListener: DetectorListener?
 ) {
@@ -61,7 +66,7 @@ class ObjectDetectorHelper(
     private var objectDetector: ObjectDetector? = null
     private var numberPlateDetector: Interpreter? = null
     private var textRecognizer: TextRecognizer? = null
-    private val minConf: Float = 0.6f // Minimum confidence threshold
+    private val minConf: Float = 0.5f // Minimum confidence threshold
     init {
         setupObjectDetector()
     }
@@ -126,6 +131,7 @@ class ObjectDetectorHelper(
                     MODEL_EFFICIENTDETV0 -> "efficientdet-lite0.tflite"
                     MODEL_EFFICIENTDETV1 -> "efficientdet-lite1.tflite"
                     MODEL_EFFICIENTDETV2 -> "efficientdet-lite2.tflite"
+                    MODEL_NUMBERPLATE -> "detect.tflite"
                     else -> "mobilenetv1.tflite"
                 }
 
@@ -176,12 +182,18 @@ class ObjectDetectorHelper(
             )
         }
         if(numberPlateDetector != null){
-            detectNumberPlate(image)
+            detectNumberPlate(image, imageRotation)
         }
     }
 
-    private fun detectNumberPlate(image: Bitmap){
-        val rotatedBitmap = rotateBitmap(image, 90)
+    private fun detectNumberPlate(image: Bitmap, imageRotation: Int){
+        var rotatedBitmap = image;
+        if(rotatedBitmap.width > rotatedBitmap.height) {
+            rotatedBitmap = rotateBitmap(image, 90)
+        }
+        val scaleFactor = 0.5f
+        rotatedBitmap = Bitmap.createScaledBitmap(rotatedBitmap, (rotatedBitmap.width * scaleFactor).toInt(), (rotatedBitmap.height * scaleFactor).toInt(), true)
+
         // Inference time is the difference between the system time at the start and finish of the process
         var inferenceTime = SystemClock.uptimeMillis()
 
@@ -229,87 +241,167 @@ class ObjectDetectorHelper(
         val classes = outputBufferClasses.floatArray
 
         // Log the scores for debugging
-        Log.e(TAG, "Scores: ${scores.joinToString(", ")}")
+        //Log.e(TAG, "Scores: ${scores.joinToString(", ")}")
 
         // Assuming labels are loaded into a list called 'labels'
-        var i=0;
+//        var i=0;
         val canvas = Canvas(rotatedBitmap)
 
-        val confidence = scores[i]
-        if (confidence >= minConf) {
-            val classIndex = classes[i].toInt()
-            val ymin = (boxes[i * 4] * rotatedBitmap.height).toInt()
-            val xmin = (boxes[i * 4 + 1] * rotatedBitmap.width).toInt()
-            val ymax = (boxes[i * 4 + 2] * rotatedBitmap.height).toInt()
-            val xmax = (boxes[i * 4 + 3] * rotatedBitmap.width).toInt()
+        for(i in scores.indices){
+            val confidence = scores[i]
+            if (confidence >= minConf) {
+                val classIndex = classes[i].toInt()
+                val ymin = (boxes[i * 4] * rotatedBitmap.height).toInt()
+                val xmin = (boxes[i * 4 + 1] * rotatedBitmap.width).toInt()
+                val ymax = (boxes[i * 4 + 2] * rotatedBitmap.height).toInt()
+                val xmax = (boxes[i * 4 + 3] * rotatedBitmap.width).toInt()
 
-            // Ensure bounding box is within image boundaries
-            val boundedXmin = xmin.coerceAtLeast(0)
-            val boundedYmin = ymin.coerceAtLeast(0)
-            val boundedXmax = xmax.coerceAtMost(rotatedBitmap.width)
-            val boundedYmax = ymax.coerceAtMost(rotatedBitmap.height)
+                // Ensure bounding box is within image boundaries
+                val boundedXmin = xmin.coerceAtLeast(0)
+                val boundedYmin = ymin.coerceAtLeast(0)
+                val boundedXmax = xmax.coerceAtMost(rotatedBitmap.width)
+                val boundedYmax = ymax.coerceAtMost(rotatedBitmap.height)
 
-            // Calculate width and height of the bounding box
-            val boxWidth = boundedXmax - boundedXmin
-            val boxHeight = boundedYmax - boundedYmin
+                // Calculate width and height of the bounding box
+                val boxWidth = boundedXmax - boundedXmin
+                val boxHeight = boundedYmax - boundedYmin
 
-            // Ensure width and height are positive
-            if (boxWidth > 32 && boxHeight > 32) {
-                Log.e(TAG, "class index = ${classIndex} | confidence = ${confidence * 100}")
+                // Ensure width and height are positive
+                if (boxWidth > 32 && boxHeight > 32) {
+                    //Log.e(TAG, "class index = ${classIndex} | confidence = ${confidence * 100}")
 
-                // Create a bitmap for the detected region
-                val detectedRegionBitmap = Bitmap.createBitmap(rotatedBitmap, boundedXmin, boundedYmin, boxWidth, boxHeight)
+                    // Create a bitmap for the detected region
+                    val detectedRegionBitmap = Bitmap.createBitmap(rotatedBitmap, boundedXmin, boundedYmin, boxWidth, boxHeight)
 
-                val ocrImage = InputImage.fromBitmap(detectedRegionBitmap, 0)
-                val result = textRecognizer?.let { Tasks.await(it.process(ocrImage)) }
-                if (result != null) {
-                    inferenceTime = SystemClock.uptimeMillis() - inferenceTime
-                    Log.i(TAG ,"Detected Plate - ${result.text}")
-                }
-//                    Toast.makeText(context,result?.text,Toast.LENGTH_LONG).show()
-                // Draw bounding box
-                val paint1 = Paint().apply {
-                    color = Color.RED
-                    style = Paint.Style.STROKE
-                    strokeWidth = 4.0f // Adjust thickness as needed
-                }
+                    val grayscaleBitmap = toGrayscale(detectedRegionBitmap)
+                    val contrastBitmap = increaseContrast(grayscaleBitmap, 2.5f)
 
-                canvas.drawRect(
-                    RectF(boundedXmin.toFloat(), boundedYmin.toFloat(), boundedXmax.toFloat(), boundedYmax.toFloat()),
-                    paint1
-                )
-//
-                Log.e(TAG, "Detected: ${classIndex} with confidence ${confidence * 100}%")
+                    val ocrImage = InputImage.fromBitmap(contrastBitmap, 0)
+                    val result = textRecognizer?.let { Tasks.await(it.process(ocrImage)) }
+                    //val result = "License Plate";
+//                    if (result != null) {
+//                        Log.i(TAG ,"Detected Plate - ${result.text}")
+//                    }
+    //                    Toast.makeText(context,result?.text,Toast.LENGTH_LONG).show()
+                    // Draw bounding box
+    //                val paint1 = Paint().apply {
+    //                    color = Color.RED
+    //                    style = Paint.Style.STROKE
+    //                    strokeWidth = 4.0f // Adjust thickness as needed
+    //                }
+    //
+    //                canvas.drawRect(
+    //                    RectF(boundedXmin.toFloat(), boundedYmin.toFloat(), boundedXmax.toFloat(), boundedYmax.toFloat()),
+    //                    paint1
+    //                )
+    //
+                    //Log.e(TAG, "Detected: ${classIndex} with confidence ${confidence * 100}%")
 
-                // Optionally save or use the detectedRegionBitmap
-                // For example, you could save it to a file or display it in an ImageView
-                if(result!= null) {
-                    val numberPlateResults: List<NumberPlateDetection> = listOf(
-                        NumberPlateDetection(
-                            boundedXmin.toFloat(),
-                            boundedYmin.toFloat(),
-                            boundedXmax.toFloat(),
-                            boundedYmax.toFloat(),
-                            result.text,
-                            confidence*100
+                    // Optionally save or use the detectedRegionBitmap
+                    // For example, you could save it to a file or display it in an ImageView
+                    if(result!= null) {
+//                        val numberPlatePattern = Regex("[A-Z0-9]{1,3}-[A-Z0-9]{1,4}|[A-Z0-9]{1,7}")
+                        val filteredText = filterText(result);
+                        var textToDisplay = result.text;
+                        if(filteredText != null)
+                            textToDisplay = filteredText;
+                        val numberPlateResults: List<NumberPlateDetection> = listOf(
+                            NumberPlateDetection(
+                                boundedXmin.toFloat(),
+                                boundedYmin.toFloat(),
+                                boundedXmax.toFloat(),
+                                boundedYmax.toFloat(),
+                                textToDisplay,
+                                confidence*100
+                            )
                         )
-                    )
+//                        val numberPlateResults: List<NumberPlateDetection> = listOf(
+//                            NumberPlateDetection(
+//                                boundedXmin.toFloat(),
+//                                boundedYmin.toFloat(),
+//                                boundedXmax.toFloat(),
+//                                boundedYmax.toFloat(),
+//                                result,
+//                                confidence*100
+//                            )
+//                        )
 
-                    objectDetectorListener?.onNumberPlateResults(
-                        numberPlateResults,
-                        inferenceTime,
-                        rotatedBitmap.height,
-                        rotatedBitmap.width
-                    )
+                        inferenceTime = SystemClock.uptimeMillis() - inferenceTime
+
+                        objectDetectorListener?.onNumberPlateResults(
+                            numberPlateResults,
+                            inferenceTime,
+                            rotatedBitmap.height,
+                            rotatedBitmap.width
+                        )
+                    }
+                    else{
+
+                        val numberPlateResults: List<NumberPlateDetection> = LinkedList()
+
+                        inferenceTime = SystemClock.uptimeMillis() - inferenceTime
+
+                        objectDetectorListener?.onNumberPlateResults(
+                            numberPlateResults,
+                            inferenceTime,
+                            0,
+                            0
+                        )
+                    }
                 }
             }
         }
-
     }
     fun rotateBitmap(source: Bitmap, rotation: Int): Bitmap {
         val matrix = Matrix()
         matrix.postRotate(rotation.toFloat())
         return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+    }
+
+    fun filterText(result: Text): String? {
+        val blocks = result.textBlocks
+        val largestBlock = blocks.maxByOrNull { it.boundingBox?.height() ?: 0 }
+
+        if (largestBlock != null) {
+            val filteredText = largestBlock.text.replace("[^A-Za-z0-9]".toRegex(), "")
+            return filteredText;
+        }
+        return null;
+    }
+
+    fun toGrayscale(bitmap: Bitmap): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val grayscaleBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(grayscaleBitmap)
+        val paint = Paint()
+        val colorMatrix = ColorMatrix()
+        colorMatrix.setSaturation(0f)
+        val colorMatrixFilter = ColorMatrixColorFilter(colorMatrix)
+        paint.colorFilter = colorMatrixFilter
+        canvas.drawBitmap(bitmap, 0f, 0f, paint)
+        return grayscaleBitmap
+    }
+
+    fun increaseContrast(bitmap: Bitmap, value: Float): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val contrastBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(contrastBitmap)
+        val paint = Paint()
+        val contrast = value
+        val scale = contrast + 1.0f
+        val translate = (-.5f * scale + .5f) * 255.0f
+        val colorMatrix = ColorMatrix(floatArrayOf(
+            scale, 0f, 0f, 0f, translate,
+            0f, scale, 0f, 0f, translate,
+            0f, 0f, scale, 0f, translate,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        val colorMatrixFilter = ColorMatrixColorFilter(colorMatrix)
+        paint.colorFilter = colorMatrixFilter
+        canvas.drawBitmap(bitmap, 0f, 0f, paint)
+        return contrastBitmap
     }
 
     private fun loadNumberPlateModelFile(): MappedByteBuffer {
@@ -354,7 +446,7 @@ class ObjectDetectorHelper(
 class NumberPlateDetection(
     val left: Float, val top: Float,
     val right: Float, val bottom: Float,
-    val number: String,
+    val number: String?,
     val score: Float
 ){
 
